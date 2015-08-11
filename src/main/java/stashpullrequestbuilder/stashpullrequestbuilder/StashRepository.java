@@ -1,10 +1,5 @@
 package stashpullrequestbuilder.stashpullrequestbuilder;
 
-import stashpullrequestbuilder.stashpullrequestbuilder.stash.StashApiClient;
-import stashpullrequestbuilder.stashpullrequestbuilder.stash.StashPullRequestComment;
-import stashpullrequestbuilder.stashpullrequestbuilder.stash.StashPullRequestMergableResponse;
-import stashpullrequestbuilder.stashpullrequestbuilder.stash.StashPullRequestResponseValue;
-import stashpullrequestbuilder.stashpullrequestbuilder.stash.StashPullRequestResponseValueRepository;
 import hudson.EnvVars;
 import hudson.model.Environment;
 import hudson.model.Hudson;
@@ -27,10 +22,14 @@ import java.util.regex.Pattern;
 
 import org.apache.commons.httpclient.UsernamePasswordCredentials;
 import org.apache.commons.lang.StringUtils;
-import org.apache.http.conn.scheme.Scheme;
-import org.apache.http.protocol.HTTP;
 import org.eclipse.jgit.transport.URIish;
 import org.jenkinsci.plugins.gitclient.GitClient;
+
+import stashpullrequestbuilder.stashpullrequestbuilder.stash.StashApiClient;
+import stashpullrequestbuilder.stashpullrequestbuilder.stash.StashPullRequestComment;
+import stashpullrequestbuilder.stashpullrequestbuilder.stash.StashPullRequestMergableResponse;
+import stashpullrequestbuilder.stashpullrequestbuilder.stash.StashPullRequestResponseValue;
+import stashpullrequestbuilder.stashpullrequestbuilder.stash.StashPullRequestResponseValueRepository;
 
 import com.cloudbees.plugins.credentials.CredentialsMatchers;
 import com.cloudbees.plugins.credentials.CredentialsProvider;
@@ -66,15 +65,15 @@ public class StashRepository {
 
     public void init() {
         trigger = this.builder.getTrigger();
-        
+
         URIish uri = null;
         StandardUsernamePasswordCredentials credentials = null;
         if (StringUtils.isNotBlank(trigger.getTargetBranchFilter()))
-        	targetBranchFilter = trigger.getTargetBranchFilter(); 
-        
+        	targetBranchFilter = trigger.getTargetBranchFilter();
+
         if (this.builder.getProject().getScm() instanceof GitSCM) {
         	GitSCM scm = (GitSCM) this.builder.getProject().getScm();
-        	
+
         	// retrieve environment variables (so they can be used in hostname)
         	EnvVars env = new EnvVars(System.getenv());
     		for (NodeProperty<?> nodeProperty: Hudson.getInstance().getGlobalNodeProperties()) {
@@ -92,7 +91,7 @@ public class StashRepository {
 
     		// resolve environment variables against each other
             EnvVars.resolve(env);
-        	
+
             // TODO: add support for multiple repositories
             if (scm.getUserRemoteConfigs().size() > 0) {
             	UserRemoteConfig config = scm.getUserRemoteConfigs().get(0);
@@ -102,7 +101,7 @@ public class StashRepository {
 				} catch (URISyntaxException e) {
 					throw new IllegalStateException("invalid stash uri in SCM configuration", e);
 				}
-            	
+
             	// get target branch if option is selected and isn't overridden by trigger configuration
             	if (trigger.isCheckMergeBeforeBuild() && StringUtils.isBlank(trigger.getTargetBranchFilter())) {
 	        		for (GitSCMExtension extension : scm.getExtensions().toList()) {
@@ -113,7 +112,7 @@ public class StashRepository {
 	        			}
 	        		}
             	}
-            	
+
             	if ("http".equals(uri.getScheme()) || "https".equals(uri.getScheme())) {
 	            	// get credentials from credentials provider if url is HTTP/HTTPS
             		// if not, it's no use to get them since they will be different for HTTP/HTTPS
@@ -128,15 +127,15 @@ public class StashRepository {
 	                    		)
 	                    );
 	                }
-	                
+
 	                client = new StashApiClient(uri, credentials);
             	} else {
             		// retrieve host from trigger && expand using previously searched environment variables
             		client = new StashApiClient(
             				env.expand(trigger.getStashHost()),
-            				uri, 
+            				uri,
             				new UsernamePasswordCredentials(
-            						env.expand(trigger.getStashUsername()), 
+            						env.expand(trigger.getStashUsername()),
             						env.expand(trigger.getStashPassword())
             				)
             			);
@@ -145,7 +144,7 @@ public class StashRepository {
             	throw new IllegalStateException("No remote configuration provided for Git SCM");
             }
         }
-        
+
         if (client == null)
         	throw new IllegalStateException("Stash API client wasn't initialized");
     }
@@ -230,13 +229,13 @@ public class StashRepository {
             	logger.fine(prefix + "skipping trigger, pull request title matches ci skip phrases");
                 return false;
             }
-            
+
             if(!isAllowedTargetBranch(pullRequest.getToRef().getBranch().getName())) {
-            	logger.fine(prefix + "skipping trigger, pull request target branch " + pullRequest.getToRef().getBranch().getName() + 
+            	logger.fine(prefix + "skipping trigger, pull request target branch " + pullRequest.getToRef().getBranch().getName() +
             			" doesn't match filter " + targetBranchFilter);
             	return false;
             }
-            
+
             if(!isPullRequestMergable(pullRequest)) {
             	logger.fine(prefix + "skipping trigger, pull request is not mergeable");
                 return false;
@@ -249,12 +248,10 @@ public class StashRepository {
             String sourceCommit = pullRequest.getFromRef().getCommit().getHash();
 
             StashPullRequestResponseValueRepository destination = pullRequest.getToRef();
-            String owner = destination.getRepository().getProjectName();
-            String repositoryName = destination.getRepository().getRepositoryName();
             String destinationCommit = destination.getCommit().getHash();
 
             String id = pullRequest.getId();
-            List<StashPullRequestComment> comments = client.getPullRequestComments(owner, repositoryName, id);
+            List<StashPullRequestComment> comments = client.getPullRequestComments(id);
 
             if (comments != null) {
                 Collections.sort(comments);
@@ -294,7 +291,7 @@ public class StashRepository {
                                     && (!destinationCommitMatch.equalsIgnoreCase(destinationCommit))) {
                             	continue;
                             }
-                            
+
                             logger.fine(prefix + "skipping trigger, pull request already built");
                             foundComment = true;
                             shouldBuild = false;
@@ -309,10 +306,10 @@ public class StashRepository {
                         break;
                     }
                 }
-                
+
                 if (!foundComment)
                 	logger.fine(prefix + "skipping trigger, nothing found in comments");
-                
+
             } else if (trigger.isOnlyBuildOnComment()) {
             	logger.fine(prefix + "skipping trigger, no comments and trigger only builds on comments");
             }

@@ -7,6 +7,7 @@ import org.codehaus.jackson.annotate.JsonIgnoreProperties;
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class StashPullRequestActivity implements Comparable<StashPullRequestActivity> {
+	
     private StashPullRequestComment comment;
 
     public StashPullRequestComment getComment() {

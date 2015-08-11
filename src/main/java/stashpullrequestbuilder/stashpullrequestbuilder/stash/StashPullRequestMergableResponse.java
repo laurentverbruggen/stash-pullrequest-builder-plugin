@@ -14,7 +14,7 @@ public class StashPullRequestMergableResponse {
 
     private Boolean canMerge;
     private Boolean conflicted;
-    private ArrayList<StashPullRequestMergableVetoMessage> vetoes ;
+    private ArrayList<StashPullRequestMergableVetoMessage> vetoes;
 
     public Boolean getCanMerge() {
         return canMerge;

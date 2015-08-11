@@ -1,280 +1,227 @@
 package stashpullrequestbuilder.stashpullrequestbuilder.stash;
 
-import org.apache.commons.httpclient.Credentials;
-import org.apache.commons.httpclient.HttpClient;
-import org.apache.commons.httpclient.HttpException;
-import org.apache.commons.httpclient.UsernamePasswordCredentials;
-import org.apache.commons.httpclient.auth.AuthScope;
-import org.apache.commons.httpclient.methods.DeleteMethod;
-import org.apache.commons.httpclient.methods.GetMethod;
-import org.apache.commons.httpclient.methods.PostMethod;
-import org.apache.commons.httpclient.methods.StringRequestEntity;
-import org.codehaus.jackson.map.ObjectMapper;
-import org.codehaus.jackson.node.ObjectNode;
-import org.eclipse.jgit.transport.URIish;
-
-import com.cloudbees.plugins.credentials.common.StandardUsernamePasswordCredentials;
-
 import java.io.IOException;
-import java.io.UnsupportedEncodingException;
+import java.net.URISyntaxException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+import org.apache.commons.httpclient.Credentials;
+import org.apache.commons.httpclient.HttpClient;
+import org.apache.commons.httpclient.HttpException;
+import org.apache.commons.httpclient.HttpMethod;
+import org.apache.commons.httpclient.UsernamePasswordCredentials;
+import org.apache.commons.httpclient.auth.AuthScope;
+import org.apache.commons.httpclient.methods.DeleteMethod;
+import org.apache.commons.httpclient.methods.GetMethod;
+import org.apache.commons.httpclient.methods.PostMethod;
+import org.apache.commons.httpclient.methods.StringRequestEntity;
+import org.apache.http.client.utils.URIBuilder;
+import org.codehaus.jackson.JsonGenerationException;
+import org.codehaus.jackson.JsonParseException;
+import org.codehaus.jackson.map.JsonMappingException;
+import org.codehaus.jackson.map.ObjectMapper;
+import org.codehaus.jackson.node.ObjectNode;
+import org.eclipse.jgit.transport.URIish;
+
+import com.cloudbees.plugins.credentials.common.StandardUsernamePasswordCredentials;
+
 /**
  * Created by Nathan McCarthy
  */
 public class StashApiClient {
-    private static final Logger logger = Logger.getLogger(StashApiClient.class.getName());
+	private static final Logger logger = Logger.getLogger(StashApiClient.class.getName());
 
-    private final String apiBaseUrl;
-    private final String host;
-    private final String project;
-    private final String repositoryName;
-    private final Credentials credentials;
+	private final String apiBaseUrl;
+	private final String host;
+	private final String project;
+	private final String repositoryName;
+	private final Credentials credentials;
 
-    public StashApiClient(URIish stashUri, StandardUsernamePasswordCredentials credentials) {
-        this(null, stashUri, credentials == null ? null : new UsernamePasswordCredentials(
-        		credentials.getUsername(), 
-        		credentials.getPassword().getPlainText()));
-    }
-    
-    public StashApiClient(String host, URIish stashUri, UsernamePasswordCredentials credentials) {
-    	// validate stash uri
-    	if (stashUri == null || !stashUri.getPath().startsWith("/scm/")) {
-        	throw new IllegalArgumentException("Invalid stash URI " + stashUri);
-        }
-    	
-        this.credentials = credentials;
-        // split on / after removing prefix /scm/ should give the project name as first entry       
-        this.project = stashUri.getPath().substring(5).split("/")[0];
-        this.repositoryName = stashUri.getHumanishName();
-        // override host if provided
-        this.host = host != null ? host : stashUri.getScheme() + "://" + stashUri.getHost() +	(stashUri.getPort() != -1 ? ":" + stashUri.getPort() : "");
-        this.apiBaseUrl = this.host + "/rest/api/1.0/projects/";
-    }
-    
-    public String getHost() {
+	public StashApiClient(URIish stashUri, StandardUsernamePasswordCredentials credentials) {
+		this(null, stashUri, credentials == null ? null : new UsernamePasswordCredentials(
+				credentials.getUsername(),
+				credentials.getPassword().getPlainText()));
+	}
+
+	public StashApiClient(String host, URIish stashUri, UsernamePasswordCredentials credentials) {
+		// validate stash uri
+		if (stashUri == null || !stashUri.getPath().startsWith("/scm/")) {
+			throw new IllegalArgumentException("Invalid stash URI " + stashUri);
+		}
+
+		this.credentials = credentials;
+		// split on / after removing prefix /scm/ should give the project name as first entry
+		this.project = stashUri.getPath().substring(5).split("/")[0];
+		this.repositoryName = stashUri.getHumanishName();
+		// override host if provided
+		this.host = host != null ? host : stashUri.getScheme() + "://" + stashUri.getHost() + (stashUri.getPort() != -1 ? ":" + stashUri.getPort() : "");
+		this.apiBaseUrl = this.host + "/rest/api/1.0/projects/";
+	}
+
+	/* =============================================================== *
+	 * 				           REQUEST HANDLING						   *
+	 * =============================================================== */
+
+	private HttpClient getHttpClient() {
+		HttpClient client = new HttpClient();
+		if (credentials != null)
+			client.getState().setCredentials(AuthScope.ANY, credentials);
+		return client;
+	}
+
+	private String sendRequest(HttpMethod method) {
+		logger.log(Level.INFO, method.getName() + " " + method.getPath());
+		HttpClient client = getHttpClient();
+		client.getParams().setAuthenticationPreemptive(true);
+		String response = null;
+		int result = -1;
+		try {
+			result = client.executeMethod(method);
+			response = method.getResponseBodyAsString();
+		}
+		catch (HttpException e) {
+			e.printStackTrace();
+		}
+		catch (IOException e) {
+			e.printStackTrace();
+		}
+		logger.log(Level.INFO, method.getName() + " " + method.getPath() + "\n  result: " + result + "\n  response: " + response);
+		return response;
+	}
+
+	private <T> List<T> get(String path, Class<? extends StashPagedResponse<T>> clazz) throws JsonParseException, JsonMappingException, IOException,
+			URISyntaxException {
+		boolean isLastPage = false;
+		int start = 0;
+		List<T> result = null;
+		while (!isLastPage) {
+			URIBuilder uriBuilder = new URIBuilder(path);
+			uriBuilder.addParameter("start", "" + start);
+			String responseJson = sendRequest(new GetMethod(uriBuilder.build().toString()));
+			StashPagedResponse<T> response = parseJson(responseJson, clazz);
+
+			// initialise array if response was successfull
+			if (result == null)
+				result = new ArrayList<T>();
+
+			// check if new call is required
+			isLastPage = response.getIsLastPage();
+			if (!isLastPage) {
+				start = response.getNextPageStart();
+			}
+
+			// add all values to result
+			result.addAll(response.getValues());
+		}
+		return result;
+	}
+
+	private void delete(String path) {
+		sendRequest(new DeleteMethod(path));
+	}
+
+	private String post(String path, String body) throws JsonGenerationException, JsonMappingException, IOException {
+		PostMethod httppost = new PostMethod(path);
+
+		StringRequestEntity requestEntity = new StringRequestEntity(body, "application/json", "UTF-8");
+		httppost.setRequestEntity(requestEntity);
+		return sendRequest(httppost);
+	}
+
+	/* =============================================================== *
+	 * 				          STASH API REQUESTS					   *
+	 * =============================================================== */
+
+	public List<StashPullRequestResponseValue> getPullRequests() {
+		String path = pullRequestsPath() + "?state=OPEN";
+		try {
+			return get(path, StashPullRequestResponse.class);
+		}
+		catch (Exception e) {
+			logger.log(Level.WARNING, "invalid GET pull requests response.", e);
+		}
+		return Collections.emptyList();
+	}
+
+	public List<StashPullRequestComment> getPullRequestComments(String pullRequestId) {
+		String path = pullRequestPath(pullRequestId) + "/activities";
+		try {
+			List<StashPullRequestActivity> activities = get(path, StashPullRequestActivityResponse.class);
+
+			if (activities != null) {
+				List<StashPullRequestComment> comments = new ArrayList<StashPullRequestComment>();
+				for (StashPullRequestActivity a : activities) {
+					if (a != null && a.getComment() != null) comments.add(a.getComment());
+				}
+				return comments;
+			}
+		}
+		catch (Exception e) {
+			logger.log(Level.WARNING, "invalid GET pull request comments response.", e);
+		}
+		return Collections.emptyList();
+	}
+
+	public void deletePullRequestComment(String pullRequestId, String commentId) {
+		delete(pullRequestPath(pullRequestId) + "/comments/" + commentId + "?version=0");
+	}
+
+	public StashPullRequestComment postPullRequestComment(String pullRequestId, String comment) {
+		String path = pullRequestPath(pullRequestId) + "/comments";
+		try {
+			ObjectMapper mapper = new ObjectMapper();
+			ObjectNode node = mapper.getNodeFactory().objectNode();
+			node.put("text", comment);
+
+			String response = post(path, mapper.writeValueAsString(node));
+			return parseJson(response, StashPullRequestComment.class);
+
+		}
+		catch (Exception e) {
+			logger.log(Level.WARNING, "invalid POST pull request comment response.", e);
+		}
+		return null;
+	}
+
+	public StashPullRequestMergableResponse getPullRequestMergeStatus(String pullRequestId) {
+		String path = pullRequestPath(pullRequestId) + "/merge";
+		try {
+			String responseJson = sendRequest(new GetMethod(path));
+			return parseJson(responseJson, StashPullRequestMergableResponse.class);
+
+		}
+		catch (Exception e) {
+			logger.log(Level.WARNING, "invalid GET pull request merge status response.", e);
+		}
+		return null;
+	}
+
+	/* friendly */ static <T> T parseJson(String json, Class<T> clazz) throws JsonParseException, JsonMappingException, IOException {
+		ObjectMapper mapper = new ObjectMapper();
+		T parsedResponse = mapper.readValue(json, clazz);
+		return parsedResponse;
+	}
+
+	private String pullRequestsPath() {
+		return apiBaseUrl + this.project + "/repos/" + this.repositoryName + "/pull-requests/";
+	}
+
+	private String pullRequestPath(String pullRequestId) {
+		return pullRequestsPath() + pullRequestId;
+	}
+
+	public String getHost() {
 		return host;
 	}
 
-    public String getProject() {
+	public String getProject() {
 		return project;
 	}
 
 	public String getRepositoryName() {
 		return repositoryName;
 	}
-
-	public List<StashPullRequestResponseValue> getPullRequests() {
-        String response = getRequest(pullRequestsPath());
-        try {
-            return parsePullRequestJson(response).getPrValues();
-        } catch(Exception e) {
-            logger.log(Level.WARNING, "invalid pull request response.", e);
-        }
-        return Collections.emptyList();
-    }
-
-    public List<StashPullRequestComment> getPullRequestComments(String projectCode, String commentRepositoryName, String pullRequestId) {
-
-        try {
-            boolean isLastPage = false;
-            int start = 0;
-            List<StashPullRequestActivityResponse> commentResponses = new ArrayList<StashPullRequestActivityResponse>();
-            while (!isLastPage) {
-                String response = getRequest(
-                        apiBaseUrl + projectCode + "/repos/" + commentRepositoryName + "/pull-requests/" + pullRequestId + "/activities?start=" + start);
-                StashPullRequestActivityResponse resp = parseCommentJson(response);
-                isLastPage = resp.getIsLastPage();
-                if (!isLastPage) {
-                    start = resp.getNextPageStart();
-                }
-                commentResponses.add(resp);
-            }
-            return extractComments(commentResponses);
-        } catch(Exception e) {
-            logger.log(Level.WARNING, "invalid pull request response.", e);
-        }
-        return Collections.emptyList();
-    }
-
-    public void deletePullRequestComment(String pullRequestId, String commentId) {
-        String path = pullRequestPath(pullRequestId) + "/comments/" + commentId + "?version=0";
-        deleteRequest(path);
-    }
-
-
-    public StashPullRequestComment postPullRequestComment(String pullRequestId, String comment) {
-        String path = pullRequestPath(pullRequestId) + "/comments";
-        try {
-            String response = postRequest(path,  comment);
-            return parseSingleCommentJson(response);
-
-        } catch (UnsupportedEncodingException e) {
-            e.printStackTrace();
-        }
-        catch (IOException e) {
-            e.printStackTrace();
-        }
-        return null;
-    }
-
-    public StashPullRequestMergableResponse getPullRequestMergeStatus(String pullRequestId) {
-        String path = pullRequestPath(pullRequestId) + "/merge";
-        try {
-            String response = getRequest(path);
-            return parsePullRequestMergeStatus(response);
-
-        } catch (UnsupportedEncodingException e) {
-            e.printStackTrace();
-        }
-        catch (IOException e) {
-            e.printStackTrace();
-        }
-        return null;
-    }
-
-    private HttpClient getHttpClient() {
-        HttpClient client = new HttpClient();
-        if (credentials != null) 
-        	client.getState().setCredentials(AuthScope.ANY, credentials);
-        
-//        if (Jenkins.getInstance() != null) {
-//            ProxyConfiguration proxy = Jenkins.getInstance().proxy;
-//            if (proxy != null) {
-//                logger.info("Jenkins proxy: " + proxy.name + ":" + proxy.port);
-//                client.getHostConfiguration().setProxy(proxy.name, proxy.port);
-//                String username = proxy.getUserName();
-//                String password = proxy.getPassword();
-//                // Consider it to be passed if username specified. Sufficient?
-//                if (username != null && !"".equals(username.trim())) {
-//                    logger.info("Using proxy authentication (user=" + username + ")");
-//                    client.getState().setProxyCredentials(AuthScope.ANY,
-//                        new UsernamePasswordCredentials(username, password));
-//                }
-//            }
-//        }
-        return client;
-    }
-
-    private String getRequest(String path) {
-        logger.log(Level.FINEST, "PR-GET-REQUEST:" + path);
-        HttpClient client = getHttpClient();
-        GetMethod httpget = new GetMethod(path);
-        client.getParams().setAuthenticationPreemptive(true);
-        String response = null;
-        try {
-            client.executeMethod(httpget);
-            response = httpget.getResponseBodyAsString();
-        } catch (HttpException e) {
-            e.printStackTrace();
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-        logger.log(Level.FINEST, "PR-GET-RESPONSE:" + response);
-        return response;
-    }
-
-    public void deleteRequest(String path) {
-        HttpClient client = getHttpClient();
-        DeleteMethod httppost = new DeleteMethod(path);
-        client.getParams().setAuthenticationPreemptive(true);
-        int res = -1;
-        try {
-            res = client.executeMethod(httppost);
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-        logger.log(Level.FINE, "Delete comment {" + path + "} returned result code; " + res);
-    }
-
-    private String postRequest(String path, String comment) throws UnsupportedEncodingException {
-        logger.log(Level.FINEST, "PR-POST-REQUEST:" + path + " with: " + comment);
-        HttpClient client = getHttpClient();
-        PostMethod httppost = new PostMethod(path);
-
-        ObjectMapper mapper = new ObjectMapper();
-        ObjectNode node = mapper.getNodeFactory().objectNode();
-        node.put("text", comment);
-
-        StringRequestEntity requestEntity = null;
-        try {
-            requestEntity = new StringRequestEntity(
-                    mapper.writeValueAsString(node),
-                    "application/json",
-                    "UTF-8");
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-
-        httppost.setRequestEntity(requestEntity);
-        client.getParams().setAuthenticationPreemptive(true);
-        String response = "";
-        try {
-            client.executeMethod(httppost);
-            response = httppost.getResponseBodyAsString();
-            logger.info("API Request Response: " + response);
-        } catch (HttpException e) {
-            e.printStackTrace();
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-        logger.log(Level.FINEST, "PR-POST-RESPONSE:" + response);
-        return response;
-
-    }
-
-    private StashPullRequestResponse parsePullRequestJson(String response) throws IOException {
-        ObjectMapper mapper = new ObjectMapper();
-        StashPullRequestResponse parsedResponse;
-        parsedResponse = mapper.readValue(response, StashPullRequestResponse.class);
-        return parsedResponse;
-    }
-
-    private StashPullRequestActivityResponse parseCommentJson(String response) throws IOException {
-        ObjectMapper mapper = new ObjectMapper();
-        StashPullRequestActivityResponse parsedResponse;
-        parsedResponse = mapper.readValue(response, StashPullRequestActivityResponse.class);
-        return parsedResponse;
-    }
-
-    private List<StashPullRequestComment> extractComments(List<StashPullRequestActivityResponse> responses) {
-        List<StashPullRequestComment> comments = new ArrayList<StashPullRequestComment>();
-        for (StashPullRequestActivityResponse parsedResponse: responses) {
-            for (StashPullRequestActivity a : parsedResponse.getPrValues()) {
-                if (a != null && a.getComment() != null) comments.add(a.getComment());
-            }
-        }
-        return comments;
-    }
-
-    private StashPullRequestComment parseSingleCommentJson(String response) throws IOException {
-        ObjectMapper mapper = new ObjectMapper();
-        StashPullRequestComment parsedResponse;
-        parsedResponse = mapper.readValue(
-                response,
-                StashPullRequestComment.class);
-        return parsedResponse;
-    }
-
-    protected static StashPullRequestMergableResponse parsePullRequestMergeStatus(String response) throws IOException {
-        ObjectMapper mapper = new ObjectMapper();
-        StashPullRequestMergableResponse parsedResponse;
-        parsedResponse = mapper.readValue(
-                response,
-                StashPullRequestMergableResponse.class);
-        return parsedResponse;
-    }
-
-    private String pullRequestsPath() {
-        return apiBaseUrl + this.project + "/repos/" + this.repositoryName + "/pull-requests/";
-    }
-
-    private String pullRequestPath(String pullRequestId) {
-        return pullRequestsPath() + pullRequestId;
-    }
 }
-
