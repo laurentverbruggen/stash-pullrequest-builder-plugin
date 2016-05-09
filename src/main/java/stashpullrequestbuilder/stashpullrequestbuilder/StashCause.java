@@ -92,9 +92,12 @@ public class StashCause extends Cause {
 
     @Override
     public String getShortDescription() {
-        return "<a href=\"" + stashHost + "/projects/" + this.getDestinationRepositoryOwner() + "/repos/" +
+    	/*
+    	return "<a href=\"" + stashHost + "/projects/" + this.getDestinationRepositoryOwner() + "/repos/" +
                 this.getDestinationRepositoryName() + "/pull-requests/" + this.getPullRequestId() +
                 "/overview\" >PR #" + this.getPullRequestId() + " " + this.getPullRequestTitle() + " </a>";
+        */
+        return "PR #" + this.getPullRequestId() + " " + this.getPullRequestTitle();
     }
 }
 
